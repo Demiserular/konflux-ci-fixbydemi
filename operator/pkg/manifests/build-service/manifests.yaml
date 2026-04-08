@@ -178,6 +178,7 @@ rules:
   - appstudio.redhat.com
   resources:
   - components
+  - components/status
   verbs:
   - get
   - list
@@ -187,7 +188,6 @@ rules:
 - apiGroups:
   - appstudio.redhat.com
   resources:
-  - components/status
   - imagerepositories
   - imagerepositories/status
   - releaseplanadmissions
@@ -414,7 +414,7 @@ spec:
         env:
         - name: PAC_WEBHOOK_URL
           value: http://pipelines-as-code-controller.pipelines-as-code.svc.cluster.local:8180
-        image: quay.io/konflux-ci/build-service:ca44d2b8386e0af3ce29d2dc2d639a4e8fae3199
+        image: quay.io/konflux-ci/build-service:a7b6e5004856a04ea7e07c3217e9e7fa23546bdd
         livenessProbe:
           httpGet:
             path: /healthz
