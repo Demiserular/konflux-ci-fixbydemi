@@ -414,7 +414,7 @@ spec:
         env:
         - name: PAC_WEBHOOK_URL
           value: http://pipelines-as-code-controller.pipelines-as-code.svc.cluster.local:8180
-        image: quay.io/konflux-ci/build-service:a7b6e5004856a04ea7e07c3217e9e7fa23546bdd
+        image: quay.io/konflux-ci/build-service:1ab65e0ebddb63612210e6649dbf68c2559b718a
         livenessProbe:
           httpGet:
             path: /healthz
