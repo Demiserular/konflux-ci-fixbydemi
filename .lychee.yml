@@ -1,0 +1,4 @@
+# Lychee configuration for repository markdown link validation.
+# Only ignore Hugo shortcode markers and other non-link template syntax.
+exclude:
+  - '\{\{'
