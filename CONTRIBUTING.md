@@ -132,6 +132,21 @@ rendered output. **Prefer merging the companion PR** (or a single PR that
 includes both pins and regenerated files) so `main` never carries mismatched
 pins and manifests.
 
+When verify fails on a **pull request**, CI cancels in-progress or queued
+**Operator E2E Tests** runs for the same commit (with retries, so runs queued
+after verify starts are still caught). E2E was cancelled because manifests are
+out of sync; fix verify or use the manifest companion PR. To keep E2E running
+despite a verify failure, add the label `force-run-e2e` to the PR.
+
+Source PRs labeled `superseded-by-companion` fail the Operator E2E workflow gate
+(merge the manifest companion PR instead). Add `force-run-e2e` to run full E2E on
+the source PR anyway.
+
+**Operator E2E Tests** does not run when labels alone change (only on new
+commits, reopen, merge queue, or maintainer `/allow` on fork PRs). After you add
+`force-run-e2e`, start CI manually—for example re-run **Operator E2E Tests** from
+the PR Checks or Actions UI, or push a new commit to the PR branch.
+
 ## Automated E2E Tests
 
 The repository includes automated tests that run in GitHub Actions on both x86_64
