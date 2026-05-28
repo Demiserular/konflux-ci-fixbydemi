@@ -33,6 +33,22 @@ import (
 
 const namespaceListerNamespace = "namespace-lister"
 
+// findEnvValue returns the last value of the named env var.
+// Checks the last match to match Kubernetes behavior where later entries override earlier ones.
+//
+//nolint:unparam
+func findEnvValue(envs []corev1.EnvVar, name string) (string, bool) {
+	var value string
+	var found bool
+	for _, env := range envs {
+		if env.Name == name {
+			value = env.Value
+			found = true
+		}
+	}
+	return value, found
+}
+
 var _ = Describe("KonfluxNamespaceLister Controller", func() {
 	Context("When reconciling a resource", func() {
 		It("should successfully reconcile the resource", func(ctx context.Context) {
@@ -155,5 +171,188 @@ var _ = Describe("applyNamespaceListerCustomizations", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
 		Expect(deployment.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String()).To(Equal("256Mi"))
+	})
+
+	Context("logLevel typed field", func() {
+		It("should inject LOG_LEVEL as slog integer when set to info", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				LogLevel: konfluxv1alpha1.LogLevelInfo,
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envLogLevel)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("0"))
+		})
+
+		It("should map all enum values to correct slog integers", func() {
+			cases := map[konfluxv1alpha1.LogLevel]string{
+				konfluxv1alpha1.LogLevelDebug: "-4",
+				konfluxv1alpha1.LogLevelInfo:  "0",
+				konfluxv1alpha1.LogLevelWarn:  "4",
+				konfluxv1alpha1.LogLevelError: "8",
+			}
+			for level, expected := range cases {
+				spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+					LogLevel: level,
+				}
+				err := applyNamespaceListerCustomizations(deployment, spec)
+				Expect(err).NotTo(HaveOccurred())
+
+				container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+				Expect(container).NotTo(BeNil())
+				val, found := findEnvValue(container.Env, envLogLevel)
+				Expect(found).To(BeTrue())
+				Expect(val).To(Equal(expected), "logLevel %q should map to %q", level, expected)
+			}
+		})
+
+		It("should not inject LOG_LEVEL when omitted", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			_, found := findEnvValue(container.Env, envLogLevel)
+			Expect(found).To(BeFalse())
+		})
+
+		It("should return an error for unsupported logLevel values", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				LogLevel: konfluxv1alpha1.LogLevel("trace"),
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unsupported logLevel"))
+		})
+
+		It("should take precedence over same var in ContainerSpec.Env", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				LogLevel: konfluxv1alpha1.LogLevelDebug,
+				NamespaceLister: &konfluxv1alpha1.NamespaceListerDeploymentSpec{
+					NamespaceLister: &konfluxv1alpha1.ContainerSpec{
+						Env: []corev1.EnvVar{
+							{Name: envLogLevel, Value: "8"},
+						},
+					},
+				},
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envLogLevel)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("-4"), "typed CRD field should take precedence over ContainerSpec.Env")
+		})
+
+		It("should let ContainerSpec.Env pass through when typed field is omitted", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				NamespaceLister: &konfluxv1alpha1.NamespaceListerDeploymentSpec{
+					NamespaceLister: &konfluxv1alpha1.ContainerSpec{
+						Env: []corev1.EnvVar{
+							{Name: envLogLevel, Value: "4"},
+						},
+					},
+				},
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envLogLevel)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("4"), "ContainerSpec.Env should pass through when typed field is omitted")
+		})
+	})
+
+	Context("cacheResyncPeriod typed field", func() {
+		It("should inject CACHE_RESYNC_PERIOD when set", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				CacheResyncPeriod: "10m",
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envCacheResyncPeriod)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("10m"))
+		})
+
+		It("should not inject CACHE_RESYNC_PERIOD when omitted", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			_, found := findEnvValue(container.Env, envCacheResyncPeriod)
+			Expect(found).To(BeFalse())
+		})
+
+		It("should accept various duration formats", func() {
+			for _, dur := range []string{"5s", "1h", "30m", "1h30m"} {
+				spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+					CacheResyncPeriod: dur,
+				}
+				err := applyNamespaceListerCustomizations(deployment, spec)
+				Expect(err).NotTo(HaveOccurred())
+
+				container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+				Expect(container).NotTo(BeNil())
+				val, found := findEnvValue(container.Env, envCacheResyncPeriod)
+				Expect(found).To(BeTrue())
+				Expect(val).To(Equal(dur))
+			}
+		})
+
+		It("should take precedence over same var in ContainerSpec.Env", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				CacheResyncPeriod: "5m",
+				NamespaceLister: &konfluxv1alpha1.NamespaceListerDeploymentSpec{
+					NamespaceLister: &konfluxv1alpha1.ContainerSpec{
+						Env: []corev1.EnvVar{
+							{Name: envCacheResyncPeriod, Value: "30m"},
+						},
+					},
+				},
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envCacheResyncPeriod)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("5m"), "typed CRD field should take precedence over ContainerSpec.Env")
+		})
+
+		It("should let ContainerSpec.Env pass through when typed field is omitted", func() {
+			spec := konfluxv1alpha1.KonfluxNamespaceListerSpec{
+				NamespaceLister: &konfluxv1alpha1.NamespaceListerDeploymentSpec{
+					NamespaceLister: &konfluxv1alpha1.ContainerSpec{
+						Env: []corev1.EnvVar{
+							{Name: envCacheResyncPeriod, Value: "30m"},
+						},
+					},
+				},
+			}
+			err := applyNamespaceListerCustomizations(deployment, spec)
+			Expect(err).NotTo(HaveOccurred())
+
+			container := testutil.FindContainer(deployment.Spec.Template.Spec.Containers, namespaceListerContainerName)
+			Expect(container).NotTo(BeNil())
+			val, found := findEnvValue(container.Env, envCacheResyncPeriod)
+			Expect(found).To(BeTrue())
+			Expect(val).To(Equal("30m"), "ContainerSpec.Env should pass through when typed field is omitted")
+		})
 	})
 })
