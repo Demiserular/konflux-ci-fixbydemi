@@ -1,18 +1,16 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-- https://github.com/konflux-ci/integration-service/config/default?ref=f49da9c1910ecfc15c4fa34cc04e02bf330513a3
-- https://github.com/konflux-ci/integration-service/config/snapshotgc?ref=f49da9c1910ecfc15c4fa34cc04e02bf330513a3
+- https://github.com/konflux-ci/integration-service/config/default?ref=9aeae33fc532ec2563f965826202035e8e40a73e
+- https://github.com/konflux-ci/integration-service/config/snapshotgc?ref=9aeae33fc532ec2563f965826202035e8e40a73e
 - konflux-integration-runner.yaml
-- kyverno-background-controller-binding.yaml
-- bootstrap-namespace.yaml
 
 namespace: integration-service
 
 images:
 - name: quay.io/konflux-ci/integration-service
   newName: quay.io/konflux-ci/integration-service
-  newTag: f49da9c1910ecfc15c4fa34cc04e02bf330513a3
+  newTag: 9aeae33fc532ec2563f965826202035e8e40a73e
 
 patches:
   - target:
@@ -51,9 +49,3 @@ patches:
       kind: ClusterRole
       name: integration-service-prometheus-viewer-role
     path: remove-prometheus-viewer-cluster-role.yaml
-  - target:
-      group: batch
-      version: v1
-      kind: CronJob
-      name: integration-service-snapshot-garbage-collector
-    path: snapshot-gc-resource-patch.yaml

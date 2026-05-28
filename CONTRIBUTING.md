@@ -4,10 +4,12 @@ Contributing Guidelines
 <!-- toc -->
 
 - [Documentation Conventions](#documentation-conventions)
+- [Cross-Platform Script Compatibility](#cross-platform-script-compatibility)
 - [Editing Markdown Files](#editing-markdown-files)
 - [Using KubeLinter](#using-kubelinter)
 - [Operator Development](#operator-development)
 - [CI/CD and Testing](#cicd-and-testing)
+  * [Operator rendered manifests](#operator-rendered-manifests)
   * [Automated E2E Tests](#automated-e2e-tests)
   * [OpenShift CI Periodic Tests](#openshift-ci-periodic-tests)
   * [ARM64 Testing](#arm64-testing)
@@ -41,6 +43,32 @@ cp scripts/deploy-local.env.template scripts/deploy-local.env
 ./scripts/deploy-local.sh
 \`\`\`
 ```
+
+# Cross-Platform Script Compatibility
+
+Scripts in this repository that are intended to run on the user's machine must
+work on both **Linux** and **macOS**. This applies to:
+
+- **Deployment scripts** — e.g. `scripts/deploy-local.sh`, `deploy-deps.sh`,
+  `deploy-konflux-on-ocp.sh`
+- **CLI helper scripts** — e.g. scripts under `operator/upstream-kustomizations/cli/`
+- **ConfigMap-hosted scripts** — scripts stored as ConfigMaps on the cluster
+  that users fetch and run locally (e.g. `setup-release.sh`, `create-tenant.sh`)
+
+When writing or modifying these scripts, follow these guidelines:
+
+- **Prefer POSIX-compatible constructs** over Bash-specific or GNU-specific
+  extensions.
+- **Avoid GNU-only flags** for common utilities. For example, `sed -i`
+  requires a backup extension argument on macOS (`sed -i '' ...`), `date`
+  flags differ between GNU and BSD, and `readlink -f` is not available on
+  macOS without `coreutils`.
+- **Test with both GNU and BSD coreutils** — utilities like `sed`, `grep`,
+  `date`, `readlink`, and `mktemp` behave differently across platforms.
+- **Do not assume `/bin/bash` is Bash 4+** — macOS ships Bash 3.2 by default.
+  Avoid associative arrays (`declare -A`), `mapfile`/`readarray`, and other
+  Bash 4+ features unless the script explicitly requires and checks for a
+  newer version.
 
 # Editing Markdown Files
 
@@ -84,6 +112,40 @@ For building and running the operator from source, see the
 Kind cluster, use `OPERATOR_INSTALL_METHOD=build` with `deploy-local.sh`.
 
 # CI/CD and Testing
+
+## Operator rendered manifests
+
+Pinned upstream components live under `operator/upstream-kustomizations/`. The
+operator bundles pre-rendered YAML under `operator/pkg/manifests/<component>/`.
+Those files must match `kustomize build` for the same pins; CI enforces that via
+`.github/workflows/verify-manifests-in-sync.yaml`.
+
+Helm-rendered **cert-manager** and **trust-manager** manifests under
+`dependencies/` (and extracted envtest CRDs) must match the chart versions in
+`.github/scripts/export-third-party-chart-env.sh`, which MintMaker/Renovate
+updates alongside the scheduled update workflow.
+
+When **MintMaker** or **Renovate** opens a PR that only bumps digests or chart
+versions, a **companion PR** may be opened automatically
+(`.github/workflows/renovate-manifest-companion.yaml`) that includes the matching
+rendered output. **Prefer merging the companion PR** (or a single PR that
+includes both pins and regenerated files) so `main` never carries mismatched
+pins and manifests.
+
+When verify fails on a **pull request**, CI cancels in-progress or queued
+**Operator E2E Tests** runs for the same commit (with retries, so runs queued
+after verify starts are still caught). E2E was cancelled because manifests are
+out of sync; fix verify or use the manifest companion PR. To keep E2E running
+despite a verify failure, add the label `force-run-e2e` to the PR.
+
+Source PRs labeled `superseded-by-companion` fail the Operator E2E workflow gate
+(merge the manifest companion PR instead). Add `force-run-e2e` to run full E2E on
+the source PR anyway.
+
+**Operator E2E Tests** does not run when labels alone change (only on new
+commits, reopen, merge queue, or maintainer `/allow` on fork PRs). After you add
+`force-run-e2e`, start CI manually—for example re-run **Operator E2E Tests** from
+the PR Checks or Actions UI, or push a new commit to the PR branch.
 
 ## Automated E2E Tests
 

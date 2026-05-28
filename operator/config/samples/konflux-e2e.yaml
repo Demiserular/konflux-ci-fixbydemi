@@ -22,7 +22,7 @@ spec:
           httpsPort: 30011
       proxy:
         replicas: 1
-        nginx:
+        reverseProxy:
           resources:
             requests:
               cpu: 30m
@@ -43,11 +43,17 @@ spec:
             hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # notsecret
             username: "user1"
             userID: "7138d2fe-724e-4e86-af8a-db7c4b080e20"
+            groups:
+              - "konflux-users"
+              - "team-alpha"
           - email: "user2@konflux.dev"
             # bcrypt hash of the string "password": $(echo password | htpasswd -BinC 10 admin | cut -d: -f2)
             hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # notsecret
             username: "user2"
             userID: "ea8e8ee1-2283-4e03-83d4-b00f8b821b64"
+            groups:
+              - "konflux-users"
+              - "team-beta"
   integrationService:
     spec:
       integrationControllerManager:
@@ -60,6 +66,13 @@ spec:
             limits:
               cpu: 30m
               memory: 128Mi
+      # snapshotGarbageCollector.resources: lower the GC container requests for resource-constrained
+      # clusters (e.g. local Kind).
+      snapshotGarbageCollector:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
   releaseService:
     spec:
       releaseControllerManager:
@@ -74,14 +87,12 @@ spec:
               memory: 256Mi
   buildService:
     spec:
+      # Skip TLS verification for PaC webhook URLs — the e2e environment
+      # exposes Pipelines-as-Code via a route with a self-signed certificate.
+      pacWebhookInsecureSSL: true
       buildControllerManager:
         replicas: 1
         manager:
-          # Skip TLS verification for PaC webhook URLs — the OpenShift e2e
-          # environment exposes Pipelines-as-Code via a route with a self-signed certificate.
-          env:
-            - name: PAC_WEBHOOK_INSECURE_SSL
-              value: "1"
           resources:
             requests:
               cpu: 30m
@@ -91,6 +102,8 @@ spec:
               memory: 128Mi
   namespaceLister:
     spec:
+      cacheResyncPeriod: "10m"
+      logLevel: info
       namespaceLister:
         replicas: 1
         namespaceLister:

@@ -296,6 +296,24 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  name: enterprisecontract-configmap-viewer-role
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - ec-defaults
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
     rbac.authorization.k8s.io/aggregate-to-edit: "true"
   name: enterprisecontractpolicy-editor-role
 rules:
@@ -370,9 +388,9 @@ subjects:
 ---
 apiVersion: v1
 data:
-  verify_ec_task_bundle: quay.io/enterprise-contract/ec-task-bundle@sha256:248b12483e5babf95a0c936e086b0fa354160d9c5c940bdfb7585440fa3e0769
+  verify_ec_task_bundle: quay.io/enterprise-contract/ec-task-bundle@sha256:862c5197adba555cb4347d96600938e62bb9aaef6a40b73b1d3854a10e8cc59a
   verify_ec_task_git_pathInRepo: tasks/verify-enterprise-contract/0.1/verify-enterprise-contract.yaml
-  verify_ec_task_git_revision: b345847182602d9a5ce9e957fa76fe02575c8018
+  verify_ec_task_git_revision: 0705178ec76f9d1751f42fdf928230066cdf9666
   verify_ec_task_git_url: https://github.com/enterprise-contract/ec-cli.git
 kind: ConfigMap
 metadata:
@@ -401,8 +419,8 @@ spec:
       include:
       - '@redhat'
     data:
-    - oci::quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles:latest@sha256:55df485d2e13c93bafe4440254306ea00508c02ca2f18b774212a793c7d235db
+    - oci::quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles:latest@sha256:7361f6fb72838b58e61c4597528346ec26865daaf69b5f1b704edfbb96bc21b6
     - github.com/redhat-appstudio/tsf-conforma-data//data?ref=1966f21842d507441a7a5e1c7de9071cf3f9ec53
     name: Default
     policy:
-    - oci::quay.io/conforma/release-policy:latest@sha256:2d9f3d23e85132ab3488a268ab47e27ce0a4aeeb02a34b2f3eeab194d9864e87
+    - oci::quay.io/conforma/release-policy:latest@sha256:82f6e44a7531f4c2f16e8a55332f1d7f15317a472351185a589f62d5a7b445c0

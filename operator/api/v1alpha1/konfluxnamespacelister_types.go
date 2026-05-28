@@ -36,6 +36,21 @@ type KonfluxNamespaceListerSpec struct {
 	// NamespaceLister defines customizations for the namespace-lister deployment.
 	// +optional
 	NamespaceLister *NamespaceListerDeploymentSpec `json:"namespaceLister,omitempty"`
+
+	// CacheResyncPeriod controls how often the namespace-lister's access cache
+	// fully re-evaluates RBAC permissions as a safety net.
+	// Accepts a Go duration string (e.g. "5s", "10m", "1h").
+	// When omitted, the namespace-lister relies solely on watch events
+	// with no periodic resync.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(s|m|h))+$`
+	CacheResyncPeriod string `json:"cacheResyncPeriod,omitempty"`
+
+	// LogLevel sets the minimum log severity for the namespace-lister.
+	// Accepted values: debug, info, warn, error.
+	// When omitted, the namespace-lister defaults to error level.
+	// +optional
+	LogLevel LogLevel `json:"logLevel,omitempty"`
 }
 
 // KonfluxNamespaceListerStatus defines the observed state of KonfluxNamespaceLister.

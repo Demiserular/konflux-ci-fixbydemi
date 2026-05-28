@@ -275,6 +275,115 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              logEncoder:
+                description: |-
+                  LogEncoder sets the log encoding format for the build-service controller.
+                  "json" produces structured JSON logs (upstream default), "console" produces
+                  human-readable output useful for development and debugging.
+                  When not set, the upstream default (json) is used.
+                enum:
+                - json
+                - console
+                type: string
+              pacWebhookInsecureSSL:
+                description: |-
+                  PACWebhookInsecureSSL controls TLS certificate verification when the build-service
+                  configures webhooks on git providers.
+                  When set to true, sets PAC_WEBHOOK_INSECURE_SSL=1 on the controller
+                  (use only in development or test environments with self-signed certificates).
+                  When set to false, forces PAC_WEBHOOK_INSECURE_SSL off, overriding any
+                  value in buildControllerManager.manager.env.
+                  When omitted, the upstream default applies and PAC_WEBHOOK_INSECURE_SSL
+                  in buildControllerManager.manager.env (if set) takes effect.
+                type: boolean
+              pipelineConfig:
+                description: |-
+                  PipelineConfig controls the contents of the build-pipeline-config ConfigMap.
+                  The operator always manages this ConfigMap; use this field to customize which
+                  pipelines are included.
+
+                  Default behavior (nil or empty):
+                    The operator applies the full set of default pipeline bundle references.
+
+                  Merge behavior:
+                    When set, the operator merges user-specified pipelines with the defaults.
+                    Pipelines with matching names override the defaults.
+                    Pipelines with removed: true exclude the matching default.
+                    Set removeDefaults: true to discard all defaults and use only user-specified pipelines.
+                properties:
+                  defaultPipelineName:
+                    description: |-
+                      DefaultPipelineName specifies which pipeline to use as the default.
+                      The referenced pipeline must exist in the final merged pipeline list.
+                      When not set, the operator-provided default is preserved.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  pipelines:
+                    description: |-
+                      Pipelines specifies user-provided pipeline overrides or additions.
+                      Entries with matching names override operator defaults.
+                    items:
+                      description: PipelineSpec defines a single pipeline entry in
+                        the build-pipeline-config ConfigMap.
+                      properties:
+                        bundle:
+                          description: Bundle is the Tekton bundle reference for this
+                            pipeline.
+                          type: string
+                        description:
+                          description: |-
+                            Description is a human-readable description of this pipeline.
+                            When overriding a default pipeline, this replaces the default description.
+                          type: string
+                        name:
+                          description: Name is the pipeline identifier. Must match
+                            a default pipeline name to override it.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        removed:
+                          description: |-
+                            Removed excludes this pipeline from the final configuration.
+                            Use to remove a specific operator-provided default pipeline.
+                            When true, bundle must not be set.
+                          type: boolean
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: bundle must not be set when removed is true
+                        rule: '!has(self.bundle) || !has(self.removed) || !self.removed'
+                      - message: bundle is required when removed is not true
+                        rule: (has(self.removed) && self.removed) || (has(self.bundle)
+                          && size(self.bundle) > 0)
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  removeDefaults:
+                    description: |-
+                      RemoveDefaults disables all operator-provided default pipelines.
+                      When true, only user-specified pipelines in the Pipelines list are included.
+                    type: boolean
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: defaultPipelineName is required when removeDefaults is
+                    true
+                  rule: '!has(self.removeDefaults) || !self.removeDefaults || has(self.defaultPipelineName)'
+                - message: at least one pipeline with a bundle must be provided when
+                    removeDefaults is true
+                  rule: '!has(self.removeDefaults) || !self.removeDefaults || self.pipelines.exists(p,
+                    !has(p.removed) || !p.removed)'
+                - message: defaultPipelineName must reference a pipeline in the pipelines
+                    list when removeDefaults is true
+                  rule: '!has(self.removeDefaults) || !self.removeDefaults || !has(self.defaultPipelineName)
+                    || self.pipelines.exists(p, p.name == self.defaultPipelineName
+                    && (!has(p.removed) || !p.removed))'
+                - message: defaultPipelineName must not reference a pipeline that
+                    is being removed
+                  rule: '!has(self.defaultPipelineName) || !self.pipelines.exists(p,
+                    p.name == self.defaultPipelineName && has(p.removed) && p.removed)'
               webhookURLs:
                 additionalProperties:
                   type: string

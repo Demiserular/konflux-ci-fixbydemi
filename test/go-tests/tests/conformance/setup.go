@@ -14,7 +14,6 @@ import (
 
 	"github.com/konflux-ci/konflux-ci/test/go-tests/pkg/framework"
 	ginkgo "github.com/onsi/ginkgo/v2"
-	gomega "github.com/onsi/gomega"
 	"k8s.io/klog/v2"
 )
 
@@ -52,13 +51,11 @@ func runSetupRelease(appName, componentName, tenantNS, managedNS string) error {
 	return cmd.Run()
 }
 
-// e2eECPExclusions lists policy rules to exclude during E2E tests. The default
-// build pipeline sets skip-checks=true which disables security scans/tests, so
-// the corresponding required_tasks_found rules must be excluded to avoid EC
-// failures during the release.
+// e2eECPExclusions lists policy rules to exclude during E2E tests. Conformance runs
+// docker-build-oci-ta-min with security tasks; exclude EC rules that are not required
+// for this environment or that reference tasks outside the minimal pipeline bundle.
 var e2eECPExclusions = []string{
 	"cve",
-	"tasks.required_tasks_found:clair-scan",
 	"tasks.required_tasks_found:roxctl-scan",
 	"tasks.required_tasks_found:clamav-scan",
 	"tasks.required_tasks_found:tpa-scan",
@@ -212,14 +209,41 @@ func dumpDiagnostics(hub *framework.ControllerHub, componentName, appName, names
 	}
 }
 
-func cleanupWithRetry(description string, fn func() error) {
-	err := gomega.InterceptGomegaFailure(func() {
-		gomega.Eventually(fn).
-			WithTimeout(30 * time.Second).
-			WithPolling(5 * time.Second).
-			Should(gomega.Succeed())
-	})
-	if err != nil {
-		klog.Warningf("conformance cleanup: %s failed after retries: %v", description, err)
+// cleanupWithRetry runs fn until it returns nil, ctx is done, or a 30s per-step retry budget elapses.
+// fn should use ctx for outbound calls so they honor the overall cleanup deadline.
+func cleanupWithRetry(ctx context.Context, description string, fn func() error) {
+	const maxStep = 30 * time.Second
+	const poll = 5 * time.Second
+	stepStart := time.Now()
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				klog.Warningf("conformance cleanup: %s stopped: %v (last attempt error: %v)", description, err, lastErr)
+			} else {
+				klog.Warningf("conformance cleanup: %s stopped: %v", description, err)
+			}
+			return
+		}
+		lastErr = fn()
+		if lastErr == nil {
+			return
+		}
+		stepElapsed := time.Since(stepStart)
+		if stepElapsed >= maxStep {
+			klog.Warningf("conformance cleanup: %s failed after retries: %v", description, lastErr)
+			return
+		}
+		remainingStep := maxStep - stepElapsed
+		d := poll
+		if remainingStep < d {
+			d = remainingStep
+		}
+		select {
+		case <-ctx.Done():
+			klog.Warningf("conformance cleanup: %s stopped: %v (last error: %v)", description, ctx.Err(), lastErr)
+			return
+		case <-time.After(d):
+		}
 	}
 }

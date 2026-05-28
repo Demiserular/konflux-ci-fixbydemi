@@ -27,7 +27,7 @@ spec:
           httpsPort: 30011
       proxy:
         replicas: 1
-        nginx:
+        reverseProxy:
           resources:
             requests:
               cpu: 30m
@@ -48,11 +48,17 @@ spec:
             hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # notsecret
             username: "user1"
             userID: "7138d2fe-724e-4e86-af8a-db7c4b080e20"
+            groups:
+              - "konflux-users"
+              - "team-alpha"
           - email: "user2@konflux.dev"
             # bcrypt hash of the string "password": $(echo password | htpasswd -BinC 10 admin | cut -d: -f2)
             hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # notsecret
             username: "user2"
             userID: "ea8e8ee1-2283-4e03-83d4-b00f8b821b64"
+            groups:
+              - "konflux-users"
+              - "team-beta"
   integrationService:
     spec:
       integrationControllerManager:
@@ -65,6 +71,13 @@ spec:
             limits:
               cpu: 30m
               memory: 128Mi
+      # snapshotGarbageCollector.resources: lower the GC container requests for resource-constrained
+      # clusters (e.g. local Kind).
+      snapshotGarbageCollector:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
   releaseService:
     spec:
       releaseControllerManager:
@@ -89,8 +102,19 @@ spec:
             limits:
               cpu: 30m
               memory: 128Mi
+      # pipelineConfig:
+      #   # removeDefaults: true  # Discard all operator-provided default pipelines
+      #   pipelines:
+      #     - name: fbc-builder
+      #       removed: true  # Remove this specific default pipeline
+      #     - name: my-custom-pipeline
+      #       bundle: quay.io/myorg/pipeline:latest
+      #   # defaultPipelineName: fbc-builder  # Use existing default pipeline as default
+      #   # defaultPipelineName: my-custom-pipeline  # Use custom pipeline as default
   namespaceLister:
     spec:
+      cacheResyncPeriod: "10m"
+      logLevel: info
       namespaceLister:
         replicas: 1
         namespaceLister:

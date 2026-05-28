@@ -197,7 +197,7 @@ func (c *Client) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts
 }
 
 // ApplyObject applies an object using server-side apply and tracks it.
-// This is the primary method for reconcilers - it uses Patch with client.Apply
+// This is the primary method for reconcilers - it uses Patch with kubernetes.SSAPatch
 // to perform server-side apply and automatically tracks the resource.
 func (c *Client) ApplyObject(
 	ctx context.Context,
@@ -206,7 +206,7 @@ func (c *Client) ApplyObject(
 	opts ...client.PatchOption,
 ) error {
 	patchOpts := append([]client.PatchOption{client.FieldOwner(fieldManager), client.ForceOwnership}, opts...)
-	if err := c.Client.Patch(ctx, obj, client.Apply, patchOpts...); err != nil {
+	if err := c.Client.Patch(ctx, obj, kubernetes.SSAPatch, patchOpts...); err != nil {
 		return err
 	}
 	c.track(obj)

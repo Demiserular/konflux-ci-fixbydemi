@@ -23,7 +23,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,7 +49,32 @@ const (
 
 	// namespaceListerContainerName is the name of the namespace-lister container
 	namespaceListerContainerName = "namespace-lister"
+
+	envCacheResyncPeriod = "CACHE_RESYNC_PERIOD"
+	envLogLevel          = "LOG_LEVEL"
 )
+
+// logLevelToEnvValue maps the CRD enum to the integer value the upstream namespace-lister expects.
+var logLevelToEnvValue = map[konfluxv1alpha1.LogLevel]string{
+	konfluxv1alpha1.LogLevelDebug: "-4",
+	konfluxv1alpha1.LogLevelInfo:  "0",
+	konfluxv1alpha1.LogLevelWarn:  "4",
+	konfluxv1alpha1.LogLevelError: "8",
+}
+
+// resolveLogLevelEnvValue converts a LogLevel to the env var value.
+// Returns ("", nil) when level is empty (field omitted), the mapped value when
+// known, or an error for unrecognised non-empty values.
+func resolveLogLevelEnvValue(level konfluxv1alpha1.LogLevel) (string, error) {
+	if level == "" {
+		return "", nil
+	}
+	v, ok := logLevelToEnvValue[level]
+	if !ok {
+		return "", fmt.Errorf("unsupported logLevel %q", level)
+	}
+	return v, nil
+}
 
 // NamespaceListerCleanupGVKs defines which resource types should be cleaned up when they are
 // no longer part of the desired state. All resources managed by this controller are always
@@ -83,7 +107,6 @@ type KonfluxNamespaceListerReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=namespace-lister-authorizer,verbs=bind
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups=kyverno.io,resources=clusterpolicies,verbs=get;list;watch;create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -146,8 +169,6 @@ func (r *KonfluxNamespaceListerReconciler) Reconcile(ctx context.Context, req ct
 // applyManifests loads and applies all embedded manifests to the cluster using the tracking client.
 // Manifests are parsed once and cached; deep copies are used during reconciliation.
 func (r *KonfluxNamespaceListerReconciler) applyManifests(ctx context.Context, tc *tracking.Client, owner *konfluxv1alpha1.KonfluxNamespaceLister) error {
-	log := logf.FromContext(ctx)
-
 	objects, err := r.ObjectStore.GetForComponent(manifests.NamespaceLister)
 	if err != nil {
 		return fmt.Errorf("failed to get parsed manifests for NamespaceLister: %w", err)
@@ -163,19 +184,6 @@ func (r *KonfluxNamespaceListerReconciler) applyManifests(ctx context.Context, t
 
 		// Apply with ownership using the tracking client
 		if err := tc.ApplyOwned(ctx, obj); err != nil {
-			gvk := obj.GetObjectKind().GroupVersionKind()
-			// TODO: Remove this once we decide if we want to have a dependency on Kyverno
-			// Only skip if the error is specifically because the Kyverno CRD is not installed.
-			// Other errors (RBAC, timeout, invalid manifest) must be propagated.
-			if meta.IsNoMatchError(err) && gvk.Group == constant.KyvernoGroup {
-				log.Info("Skipping Kyverno resource: CRD not installed",
-					"kind", gvk.Kind,
-					"apiVersion", gvk.GroupVersion().String(),
-					"namespace", obj.GetNamespace(),
-					"name", obj.GetName(),
-				)
-				continue
-			}
 			return fmt.Errorf("failed to apply object %s/%s (%s) from %s: %w",
 				obj.GetNamespace(), obj.GetName(), tracking.GetKind(obj), manifests.NamespaceLister, err)
 		}
@@ -185,23 +193,30 @@ func (r *KonfluxNamespaceListerReconciler) applyManifests(ctx context.Context, t
 
 // applyNamespaceListerCustomizations applies user-defined customizations to the namespace-lister deployment.
 func applyNamespaceListerCustomizations(deployment *appsv1.Deployment, spec konfluxv1alpha1.KonfluxNamespaceListerSpec) error {
-	if spec.NamespaceLister == nil {
-		return nil
+	var containerSpec *konfluxv1alpha1.ContainerSpec
+	if spec.NamespaceLister != nil {
+		if spec.NamespaceLister.Replicas > 0 {
+			deployment.Spec.Replicas = &spec.NamespaceLister.Replicas
+		}
+		containerSpec = spec.NamespaceLister.NamespaceLister
 	}
 
-	deploymentSpec := spec.NamespaceLister
-
-	// Apply replicas if set (non-zero value)
-	if deploymentSpec.Replicas > 0 {
-		deployment.Spec.Replicas = &deploymentSpec.Replicas
+	logLevelValue, err := resolveLogLevelEnvValue(spec.LogLevel)
+	if err != nil {
+		return fmt.Errorf("invalid namespace-lister spec: %w", err)
 	}
 
-	// Build and apply container customizations using pkg/customization
+	containerOpts := []customization.ContainerOption{
+		customization.FromContainerSpec(containerSpec),
+		customization.WithOptionalEnvOverride(envCacheResyncPeriod, spec.CacheResyncPeriod),
+		customization.WithOptionalEnvOverride(envLogLevel, logLevelValue),
+	}
+
 	overlay := customization.BuildPodOverlay(
 		customization.DeploymentContext{},
 		customization.WithContainerBuilder(
 			namespaceListerContainerName,
-			customization.FromContainerSpec(deploymentSpec.NamespaceLister),
+			containerOpts...,
 		),
 	)
 	return overlay.ApplyToDeployment(deployment)
