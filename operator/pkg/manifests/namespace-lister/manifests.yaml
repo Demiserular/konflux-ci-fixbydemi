@@ -88,17 +88,13 @@ spec:
         - -cert-path=/var/tls/tls.crt
         - -key-path=/var/tls/tls.key
         env:
-        - name: LOG_LEVEL
-          value: "0"
-        - name: CACHE_RESYNC_PERIOD
-          value: 10m
         - name: CACHE_NAMESPACE_LABELSELECTOR
           value: konflux-ci.dev/type=tenant
         - name: AUTH_USERNAME_HEADER
           value: X-User
         - name: AUTH_GROUPS_HEADER
           value: X-Group
-        image: quay.io/konflux-ci/namespace-lister@sha256:990e0ad159168851beed23ecc32bc3b66983729167768b8b7d3e77fc12df0a42
+        image: quay.io/konflux-ci/namespace-lister@sha256:847e970293035c16b4bde2575688ed4f73758f38a6dd7537afcd5464c8b5794c
         livenessProbe:
           httpGet:
             path: /healthz
