@@ -8,6 +8,12 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: konflux-integration-service
 spec:
+  # Pipeline run timeouts. Each field maps to the corresponding env var on the
+  # controller-manager container. Omit to use the upstream integration-service defaults.
+  pipelineTimeout: "6h"
+  tasksTimeout: "4h"
+  finallyTimeout: "2h"
+
   integrationControllerManager:
     replicas: 3
     manager:
@@ -18,14 +24,44 @@ spec:
         limits:
           cpu: 512m
           memory: 1Gi
-      env:
-        - name: EXAMPLE_CUSTOM_CONFIG
-          valueFrom:
-            configMapKeyRef:
-              name: integration-service-config
-              key: custom-config
-        - name: EXAMPLE_SECRET_VALUE
-          valueFrom:
-            secretKeyRef:
-              name: integration-service-secret
-              key: secret-key
+      # For env vars beyond the typed timeout fields above, use manager.env directly.
+      # Supports plain values and valueFrom references (ConfigMap, Secret).
+      # env:
+      #   - name: EXAMPLE_CUSTOM_CONFIG
+      #     valueFrom:
+      #       configMapKeyRef:
+      #         name: integration-service-config
+      #         key: custom-config
+      #   - name: EXAMPLE_SECRET_VALUE
+      #     valueFrom:
+      #       secretKeyRef:
+      #         name: integration-service-secret
+      #         key: secret-key
+
+  # Snapshot GC retention policy. Each field maps to the corresponding env var on the
+  # GC container. Omit any field to use the upstream integration-service default.
+  # Upstream defaults: prSnapshotsToKeep=70, nonPRSnapshotsToKeep=640, minSnapshotsToKeepPerComponent=5
+  prSnapshotsToKeep: "10"
+  nonPRSnapshotsToKeep: "100"  # upstream default is 640; set lower for tighter retention
+  minSnapshotsToKeepPerComponent: "4"
+
+  snapshotGarbageCollector:
+    # resources: override the GC container resource requests/limits.
+    # When omitted, the operator uses the values defined in the upstream integration-service
+    # repository (config/snapshotgc/snapshotgc.yaml at the pinned SHA).
+    # Set lower requests here only for resource-constrained environments (e.g. local Kind).
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: "1"
+        memory: 2000Mi
+    # For GC env vars beyond the typed fields above, use snapshotGarbageCollector.env directly.
+    # Supports plain values and valueFrom references (ConfigMap, Secret).
+    # env:
+    #   - name: EXAMPLE_GC_CONFIG
+    #     valueFrom:
+    #       configMapKeyRef:
+    #         name: snapshot-gc-config
+    #         key: some-key

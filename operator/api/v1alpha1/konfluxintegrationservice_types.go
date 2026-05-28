@@ -25,6 +25,63 @@ type KonfluxIntegrationServiceSpec struct {
 	// IntegrationControllerManager defines customizations for the controller-manager deployment.
 	// +optional
 	IntegrationControllerManager *ControllerManagerDeploymentSpec `json:"integrationControllerManager,omitempty"`
+
+	// PipelineTimeout is the overall pipeline run timeout (e.g. "6h", "1h30m", "90m").
+	// Maps to the PIPELINE_TIMEOUT env var on the controller-manager container.
+	// Takes precedence over any PIPELINE_TIMEOUT entry in integrationControllerManager.manager.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+h)?([0-9]+m)?([0-9]+s)?$`
+	// +kubebuilder:validation:MinLength=2
+	PipelineTimeout string `json:"pipelineTimeout,omitempty"`
+
+	// TasksTimeout is the timeout for tasks within a pipeline run (e.g. "4h", "90m").
+	// Maps to the TASKS_TIMEOUT env var on the controller-manager container.
+	// Takes precedence over any TASKS_TIMEOUT entry in integrationControllerManager.manager.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+h)?([0-9]+m)?([0-9]+s)?$`
+	// +kubebuilder:validation:MinLength=2
+	TasksTimeout string `json:"tasksTimeout,omitempty"`
+
+	// FinallyTimeout is the timeout for finally tasks (e.g. "2h", "30m").
+	// Maps to the FINALLY_TIMEOUT env var on the controller-manager container.
+	// Takes precedence over any FINALLY_TIMEOUT entry in integrationControllerManager.manager.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+h)?([0-9]+m)?([0-9]+s)?$`
+	// +kubebuilder:validation:MinLength=2
+	FinallyTimeout string `json:"finallyTimeout,omitempty"`
+
+	// SnapshotGarbageCollector defines customizations for the snapshot GC CronJob container
+	// (resources, env vars).
+	// +optional
+	SnapshotGarbageCollector *ContainerSpec `json:"snapshotGarbageCollector,omitempty"`
+
+	// PRSnapshotsToKeep is the number of snapshots to retain per component for PR-triggered
+	// pipeline runs. Maps to the PR_SNAPSHOTS_TO_KEEP env var on the GC container.
+	// Takes precedence over any PR_SNAPSHOTS_TO_KEEP entry in snapshotGarbageCollector.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+$`
+	PRSnapshotsToKeep string `json:"prSnapshotsToKeep,omitempty"`
+
+	// NonPRSnapshotsToKeep is the number of snapshots to retain per component for non-PR
+	// pipeline runs. Maps to the NON_PR_SNAPSHOTS_TO_KEEP env var on the GC container.
+	// Takes precedence over any NON_PR_SNAPSHOTS_TO_KEEP entry in snapshotGarbageCollector.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+$`
+	NonPRSnapshotsToKeep string `json:"nonPRSnapshotsToKeep,omitempty"`
+
+	// MinSnapshotsToKeepPerComponent is the minimum number of snapshots to retain per component,
+	// regardless of PR/non-PR classification. Injected as the MIN_SNAPSHOTS_TO_KEEP_PER_COMPONENT
+	// env var on the GC container.
+	// Takes precedence over any MIN_SNAPSHOTS_TO_KEEP_PER_COMPONENT entry in snapshotGarbageCollector.env.
+	// When omitted, the upstream integration-service default applies.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+$`
+	MinSnapshotsToKeepPerComponent string `json:"minSnapshotsToKeepPerComponent,omitempty"`
 }
 
 // KonfluxIntegrationServiceStatus defines the observed state of KonfluxIntegrationService

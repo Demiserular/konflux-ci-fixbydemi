@@ -8,10 +8,9 @@ resources:
 - certificate.yaml
 - network_policy_allow_to_apiserver.yaml
 - network_policy_allow_from_konfluxui.yaml
-- deny-virtual-domain.yaml
 namespace: namespace-lister
 images:
-- digest: sha256:ff560d58a878777bbfd30fe4a69cba053afa17a0d5008dae85ade76a4ca76b9c
+- digest: sha256:847e970293035c16b4bde2575688ed4f73758f38a6dd7537afcd5464c8b5794c
   name: quay.io/konflux-ci/namespace-lister
   newName: quay.io/konflux-ci/namespace-lister
 patches:

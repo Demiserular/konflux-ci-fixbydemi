@@ -33,6 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	konfluxv1alpha1 "github.com/konflux-ci/konflux-ci/operator/api/v1alpha1"
+	"github.com/konflux-ci/konflux-ci/operator/internal/common"
 	"github.com/konflux-ci/konflux-ci/operator/internal/condition"
 	"github.com/konflux-ci/konflux-ci/operator/internal/constant"
 	"github.com/konflux-ci/konflux-ci/operator/internal/predicate"
@@ -65,6 +66,9 @@ const (
 	// On OpenShift, the build-service auto-discovers the PaC Route.
 	pacWebhookURLEnvName      = "PAC_WEBHOOK_URL"
 	pacWebhookURLNonOpenShift = "http://pipelines-as-code-controller.pipelines-as-code.svc.cluster.local:8180"
+
+	// zapEncoderArg is the CLI flag that controls log encoding format.
+	zapEncoderArg = "--zap-encoder"
 
 	// Webhook config constants for the optional per-provider webhook URL mapping.
 	// The volume, mount, and arg are baked into the manifest with optional: true.
@@ -148,7 +152,7 @@ func (r *KonfluxBuildServiceReconciler) Reconcile(ctx context.Context, req ctrl.
 	})
 
 	// Ensure the build-service namespace exists before creating ConfigMaps in it.
-	if err := r.ensureNamespaceExists(ctx, tc); err != nil {
+	if err := common.EnsureNamespaceExists(ctx, r.ObjectStore, manifests.BuildService, webhookConfigNamespace, tc); err != nil {
 		return errHandler.HandleWithReason(ctx, err, condition.ReasonNamespaceCreationFailed, "ensure namespace exists")
 	}
 
@@ -205,6 +209,15 @@ func (r *KonfluxBuildServiceReconciler) applyManifests(ctx context.Context, tc *
 			}
 		}
 
+		// Apply pipeline config merge logic to the build-pipeline-config ConfigMap
+		if configMap, ok := obj.(*corev1.ConfigMap); ok {
+			if configMap.Name == "build-pipeline-config" {
+				if err := applyPipelineConfigMerge(logf.FromContext(ctx), configMap, owner.Spec.PipelineConfig); err != nil {
+					return fmt.Errorf("failed to merge pipeline config: %w", err)
+				}
+			}
+		}
+
 		// Skip OpenShift SecurityContextConstraints when not running on OpenShift
 		if _, isSCC := obj.(*securityv1.SecurityContextConstraints); isSCC {
 			if r.ClusterInfo == nil || !r.ClusterInfo.IsOpenShift() {
@@ -247,7 +260,8 @@ func applyBuildServiceDeploymentCustomizations(deployment *appsv1.Deployment, sp
 // On OpenShift, PAC_WEBHOOK_URL is never set — the build-service auto-discovers the PaC Route.
 // When webhookConfigMapName is non-empty, the webhook-config volume (baked into the manifest
 // with optional: true) is updated to reference the hashed ConfigMap.
-// User-provided env vars from the CR spec always take precedence.
+// Typed CRD fields (e.g. pacWebhookInsecureSSL) take precedence over
+// user-provided env vars in buildControllerManager.manager.env.
 func buildBuildControllerManagerOverlay(spec konfluxv1alpha1.KonfluxBuildServiceSpec, clusterInfo *clusterinfo.Info, webhookConfigMapName string) *customization.PodOverlay {
 	var containerOpts []customization.ContainerOption
 	var podOpts []customization.PodOverlayOption
@@ -268,44 +282,34 @@ func buildBuildControllerManagerOverlay(spec konfluxv1alpha1.KonfluxBuildService
 		podOpts = append(podOpts, customization.WithConfigMapVolumeUpdate(webhookConfigVolName, webhookConfigMapName))
 	}
 
-	if spec.BuildControllerManager == nil {
-		podOpts = append(podOpts,
-			customization.WithContainerOpts(buildManagerContainerName, customization.DeploymentContext{}, containerOpts...),
-		)
-		return customization.NewPodOverlay(podOpts...)
+	if spec.LogEncoder != "" {
+		containerOpts = append(containerOpts, customization.WithArgs(zapEncoderArg+"="+spec.LogEncoder))
+	}
+
+	var deployCtx customization.DeploymentContext
+	var managerSpec *konfluxv1alpha1.ContainerSpec
+	if spec.BuildControllerManager != nil {
+		managerSpec = spec.BuildControllerManager.Manager
+		deployCtx = customization.DeploymentContext{Replicas: spec.BuildControllerManager.Replicas}
 	}
 
 	containerOpts = append(containerOpts,
-		customization.FromContainerSpec(spec.BuildControllerManager.Manager),
+		customization.FromContainerSpec(managerSpec),
 		customization.WithLeaderElection(),
 	)
 
-	podOpts = append(podOpts,
-		customization.WithContainerBuilder(buildManagerContainerName, containerOpts...)(customization.DeploymentContext{Replicas: spec.BuildControllerManager.Replicas}),
-	)
-	return customization.NewPodOverlay(podOpts...)
-}
-
-// ensureNamespaceExists applies the build-service Namespace from the embedded manifests.
-// This must run before any resources are created in the namespace (e.g., ConfigMaps).
-func (r *KonfluxBuildServiceReconciler) ensureNamespaceExists(ctx context.Context, tc *tracking.Client) error {
-	objects, err := r.ObjectStore.GetForComponent(manifests.BuildService)
-	if err != nil {
-		return fmt.Errorf("failed to get parsed manifests for BuildService: %w", err)
-	}
-
-	for _, obj := range objects {
-		if namespace, ok := obj.(*corev1.Namespace); ok {
-			if namespace.Name != webhookConfigNamespace {
-				return fmt.Errorf(
-					"unexpected namespace name in manifest: expected %s, got %s", webhookConfigNamespace, namespace.Name)
-			}
-			if err := tc.ApplyOwned(ctx, namespace); err != nil {
-				return fmt.Errorf("failed to apply namespace %s: %w", namespace.Name, err)
-			}
+	if spec.PACWebhookInsecureSSL != nil {
+		if *spec.PACWebhookInsecureSSL {
+			containerOpts = append(containerOpts, customization.WithEnvOverride("PAC_WEBHOOK_INSECURE_SSL", "1"))
+		} else {
+			containerOpts = append(containerOpts, customization.WithoutEnv("PAC_WEBHOOK_INSECURE_SSL"))
 		}
 	}
-	return nil
+
+	podOpts = append(podOpts,
+		customization.WithContainerOpts(buildManagerContainerName, deployCtx, containerOpts...),
+	)
+	return customization.NewPodOverlay(podOpts...)
 }
 
 // reconcileWebhookConfig ensures the webhook config ConfigMap exists.

@@ -276,6 +276,77 @@ func TestWithEnvOverride(t *testing.T) {
 	})
 }
 
+func TestWithoutEnv(t *testing.T) {
+	ctx := DeploymentContext{Replicas: 1}
+
+	t.Run("removes existing variable", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx,
+			WithEnv(corev1.EnvVar{Name: "KEEP", Value: "a"}),
+			WithEnv(corev1.EnvVar{Name: "REMOVE", Value: "b"}),
+			WithoutEnv("REMOVE"),
+		)
+		g.Expect(c.Env).To(gomega.HaveLen(1))
+		g.Expect(c.Env[0].Name).To(gomega.Equal("KEEP"))
+	})
+
+	t.Run("no-op when variable does not exist", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx,
+			WithEnv(corev1.EnvVar{Name: "KEEP", Value: "a"}),
+			WithoutEnv("NONEXISTENT"),
+		)
+		g.Expect(c.Env).To(gomega.HaveLen(1))
+		g.Expect(c.Env[0].Name).To(gomega.Equal("KEEP"))
+	})
+
+	t.Run("no-op on empty env list", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx, WithoutEnv("VAR1"))
+		g.Expect(c.Env).To(gomega.BeEmpty())
+	})
+}
+
+func TestWithOptionalEnvOverride(t *testing.T) {
+	ctx := DeploymentContext{Replicas: 1}
+
+	t.Run("adds environment variable when value is non-empty", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx, WithOptionalEnvOverride("VAR1", "value1"))
+		g.Expect(c.Env).To(gomega.HaveLen(1))
+		g.Expect(c.Env[0].Name).To(gomega.Equal("VAR1"))
+		g.Expect(c.Env[0].Value).To(gomega.Equal("value1"))
+	})
+
+	t.Run("is a no-op when value is empty", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx, WithOptionalEnvOverride("VAR1", ""))
+		g.Expect(c.Env).To(gomega.BeEmpty())
+	})
+
+	t.Run("overrides existing variable when value is non-empty", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx,
+			WithEnv(corev1.EnvVar{Name: "VAR1", Value: "original"}),
+			WithOptionalEnvOverride("VAR1", "override"),
+		)
+		g.Expect(c.Env).To(gomega.HaveLen(1))
+		g.Expect(c.Env[0].Name).To(gomega.Equal("VAR1"))
+		g.Expect(c.Env[0].Value).To(gomega.Equal("override"))
+	})
+
+	t.Run("leaves existing variable untouched when value is empty", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx,
+			WithEnv(corev1.EnvVar{Name: "VAR1", Value: "original"}),
+			WithOptionalEnvOverride("VAR1", ""),
+		)
+		g.Expect(c.Env).To(gomega.HaveLen(1))
+		g.Expect(c.Env[0].Name).To(gomega.Equal("VAR1"))
+		g.Expect(c.Env[0].Value).To(gomega.Equal("original"))
+	})
+}
+
 func TestWithResources(t *testing.T) {
 	ctx := DeploymentContext{Replicas: 1}
 
@@ -320,6 +391,28 @@ func TestWithVolumeMounts(t *testing.T) {
 		g.Expect(c.VolumeMounts).To(gomega.HaveLen(2))
 		g.Expect(c.VolumeMounts[0].Name).To(gomega.Equal("vol1"))
 		g.Expect(c.VolumeMounts[0].MountPath).To(gomega.Equal("/mnt/vol1"))
+	})
+}
+
+func TestWithRunAsUser(t *testing.T) {
+	ctx := DeploymentContext{Replicas: 1}
+
+	t.Run("sets runAsUser on nil security context", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		c := NewContainerOverlay(ctx, WithRunAsUser(1001))
+		g.Expect(c.SecurityContext).NotTo(gomega.BeNil())
+		g.Expect(*c.SecurityContext.RunAsUser).To(gomega.Equal(int64(1001)))
+	})
+
+	t.Run("preserves existing security context fields", func(t *testing.T) {
+		g := gomega.NewWithT(t)
+		runAsNonRoot := true
+		c := NewContainerOverlay(ctx,
+			WithSecurityContext(&corev1.SecurityContext{RunAsNonRoot: &runAsNonRoot}),
+			WithRunAsUser(1001),
+		)
+		g.Expect(*c.SecurityContext.RunAsUser).To(gomega.Equal(int64(1001)))
+		g.Expect(*c.SecurityContext.RunAsNonRoot).To(gomega.BeTrue())
 	})
 }
 

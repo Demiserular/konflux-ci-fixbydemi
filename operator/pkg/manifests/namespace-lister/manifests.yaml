@@ -88,17 +88,13 @@ spec:
         - -cert-path=/var/tls/tls.crt
         - -key-path=/var/tls/tls.key
         env:
-        - name: LOG_LEVEL
-          value: "0"
-        - name: CACHE_RESYNC_PERIOD
-          value: 10m
         - name: CACHE_NAMESPACE_LABELSELECTOR
           value: konflux-ci.dev/type=tenant
         - name: AUTH_USERNAME_HEADER
           value: X-User
         - name: AUTH_GROUPS_HEADER
           value: X-Group
-        image: quay.io/konflux-ci/namespace-lister@sha256:ff560d58a878777bbfd30fe4a69cba053afa17a0d5008dae85ade76a4ca76b9c
+        image: quay.io/konflux-ci/namespace-lister@sha256:847e970293035c16b4bde2575688ed4f73758f38a6dd7537afcd5464c8b5794c
         livenessProbe:
           httpGet:
             path: /healthz
@@ -160,37 +156,6 @@ spec:
     kind: ClusterIssuer
     name: ca-issuer
   secretName: namespace-lister-tls
----
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
-metadata:
-  name: deny-virtual-domain
-  namespace: namespace-lister
-spec:
-  rules:
-  - match:
-      any:
-      - resources:
-          kinds:
-          - /v1/Namespace
-          operations:
-          - CREATE
-          - UPDATE
-          selector:
-            matchLabels:
-              konflux-ci.dev/type: tenant
-    name: deny-virtual-domain-labels-annotations
-    skipBackgroundRequests: true
-    validate:
-      allowExistingViolations: true
-      cel:
-        expressions:
-        - expression: '!object.metadata.labels.exists(key, key.startsWith("virtual.konflux-ci.dev/"))'
-          message: Tenant namespaces can not have labels with domain 'virtual.konflux-ci.dev'
-        - expression: '!has(object.metadata.annotations) || !object.metadata.annotations.exists(key,
-            key.startsWith("virtual.konflux-ci.dev/"))'
-          message: Tenant namespaces can not have annotations with domain 'virtual.konflux-ci.dev'
-  validationFailureAction: Enforce
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
