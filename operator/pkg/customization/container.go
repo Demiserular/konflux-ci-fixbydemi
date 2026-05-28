@@ -87,6 +87,20 @@ func WithEnvOverride(name, value string) ContainerOption {
 	}
 }
 
+// WithoutEnv removes an environment variable by name.
+// If the variable does not exist, this is a no-op.
+func WithoutEnv(name string) ContainerOption {
+	return func(c *corev1.Container, _ DeploymentContext) {
+		filtered := make([]corev1.EnvVar, 0, len(c.Env))
+		for _, env := range c.Env {
+			if env.Name != name {
+				filtered = append(filtered, env)
+			}
+		}
+		c.Env = filtered
+	}
+}
+
 // WithResources sets resource requirements for the container.
 func WithResources(resources corev1.ResourceRequirements) ContainerOption {
 	return func(c *corev1.Container, _ DeploymentContext) {
@@ -108,11 +122,35 @@ func WithSecurityContext(sc *corev1.SecurityContext) ContainerOption {
 	}
 }
 
+// WithRunAsUser sets securityContext.runAsUser on the container, initializing
+// the SecurityContext if needed. Uses strategic merge so other SecurityContext
+// fields (e.g. runAsNonRoot, readOnlyRootFilesystem) from the base manifest
+// are preserved.
+func WithRunAsUser(uid int64) ContainerOption {
+	return func(c *corev1.Container, _ DeploymentContext) {
+		if c.SecurityContext == nil {
+			c.SecurityContext = &corev1.SecurityContext{}
+		}
+		u := uid
+		c.SecurityContext.RunAsUser = &u
+	}
+}
+
 // WithImage sets the container image.
 func WithImage(image string) ContainerOption {
 	return func(c *corev1.Container, _ DeploymentContext) {
 		c.Image = image
 	}
+}
+
+// WithOptionalEnvOverride is like WithEnvOverride but is a no-op when value is empty,
+// leaving any existing variable (or the upstream manifest default) in place.
+// Use this when a CRD field should set an env var only when explicitly provided.
+func WithOptionalEnvOverride(name, value string) ContainerOption {
+	if value == "" {
+		return func(_ *corev1.Container, _ DeploymentContext) {}
+	}
+	return WithEnvOverride(name, value)
 }
 
 // --- Context-aware options ---

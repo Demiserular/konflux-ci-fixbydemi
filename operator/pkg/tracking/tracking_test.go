@@ -162,7 +162,7 @@ func TestClient_Patch(t *testing.T) {
 		},
 	}
 
-	err := tc.Patch(ctx, patched, client.Apply, client.FieldOwner("test-manager"), client.ForceOwnership)
+	err := tc.Patch(ctx, patched, kubernetes.SSAPatch, client.FieldOwner("test-manager"), client.ForceOwnership)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// Verify the resource is tracked
@@ -1059,7 +1059,7 @@ func TestIsNoKindMatchError(t *testing.T) {
 	t.Run("returns true for deeply wrapped NoKindMatchError", func(t *testing.T) {
 		g := NewWithT(t)
 		noKindErr := &meta.NoKindMatchError{
-			GroupKind: schema.GroupKind{Group: "kyverno.io", Kind: "Policy"},
+			GroupKind: schema.GroupKind{Group: "example.com", Kind: "Widget"},
 		}
 		wrappedOnce := fmt.Errorf("cleanup failed: %w", noKindErr)
 		wrappedTwice := fmt.Errorf("reconcile error: %w", wrappedOnce)

@@ -22,10 +22,10 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -57,8 +57,23 @@ const (
 	// Deployment names
 	controllerManagerDeploymentName = "integration-service-controller-manager"
 
+	// CronJob names
+	snapshotGCCronJobName = "integration-service-snapshot-garbage-collector"
+
 	// Container names
-	managerContainerName = "manager"
+	managerContainerName    = "manager"
+	snapshotGCContainerName = "test-gc"
+
+	// Env var names for pipeline run timeout configuration.
+	envPipelineTimeout = "PIPELINE_TIMEOUT"
+	envTasksTimeout    = "TASKS_TIMEOUT"
+	envFinallyTimeout  = "FINALLY_TIMEOUT"
+
+	// Env var names for snapshot garbage collector retention configuration.
+	// The binary reads these after flag.Parse(), so they override the command-line args.
+	envPRSnapshotsToKeep              = "PR_SNAPSHOTS_TO_KEEP"
+	envNonPRSnapshotsToKeep           = "NON_PR_SNAPSHOTS_TO_KEEP"
+	envMinSnapshotsToKeepPerComponent = "MIN_SNAPSHOTS_TO_KEEP_PER_COMPONENT"
 )
 
 // IntegrationServiceCleanupGVKs defines which resource types should be cleaned up when they are
@@ -91,11 +106,10 @@ type KonfluxIntegrationServiceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,resourceNames=integration-service-leader-election-role,verbs=bind;escalate
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,resourceNames=integration-service-leader-election-rolebinding,verbs=bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=integration-service-integrationtestscenario-admin-role;integration-service-integrationtestscenario-editor-role;integration-service-integrationtestscenario-viewer-role;integration-service-manager-role;integration-service-metrics-auth-role;integration-service-snapshot-garbage-collector;integration-service-tekton-editor-role;konflux-integration-runner,verbs=bind;escalate
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=integration-service-manager-rolebinding;integration-service-metrics-auth-rolebinding;integration-service-snapshot-garbage-collector;integration-service-tekton-role-binding;kyverno-background-controller-konflux-integration-runner,verbs=bind
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=integration-service-manager-rolebinding;integration-service-metrics-auth-rolebinding;integration-service-snapshot-garbage-collector;integration-service-tekton-role-binding,verbs=bind
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates;issuers,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups=kyverno.io,resources=clusterpolicies,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations;validatingwebhookconfigurations,verbs=get;list;watch;create;patch
 
@@ -167,8 +181,6 @@ func (r *KonfluxIntegrationServiceReconciler) Reconcile(ctx context.Context, req
 // applyManifests loads and applies all embedded manifests to the cluster using the tracking client.
 // Manifests are parsed once and cached; deep copies are used during reconciliation.
 func (r *KonfluxIntegrationServiceReconciler) applyManifests(ctx context.Context, tc *tracking.Client, owner *konfluxv1alpha1.KonfluxIntegrationService, consoleURL string) error {
-	log := logf.FromContext(ctx)
-
 	objects, err := r.ObjectStore.GetForComponent(manifests.Integration)
 	if err != nil {
 		return fmt.Errorf("failed to get parsed manifests for Integration: %w", err)
@@ -182,21 +194,15 @@ func (r *KonfluxIntegrationServiceReconciler) applyManifests(ctx context.Context
 			}
 		}
 
+		// Apply customizations for the snapshot GC CronJob
+		if cronJob, ok := obj.(*batchv1.CronJob); ok && cronJob.Name == snapshotGCCronJobName {
+			if err := applySnapshotGCCustomizations(cronJob, owner.Spec); err != nil {
+				return fmt.Errorf("failed to apply customizations to CronJob %s: %w", cronJob.Name, err)
+			}
+		}
+
 		// Apply with ownership using the tracking client
 		if err := tc.ApplyOwned(ctx, obj); err != nil {
-			gvk := obj.GetObjectKind().GroupVersionKind()
-			// TODO: Remove this once we decide if we want to have a dependency on Kyverno
-			// Only skip if the error is specifically because the Kyverno CRD is not installed.
-			// Other errors (RBAC, timeout, invalid manifest) must be propagated.
-			if meta.IsNoMatchError(err) && gvk.Group == constant.KyvernoGroup {
-				log.Info("Skipping Kyverno resource: CRD not installed",
-					"kind", gvk.Kind,
-					"apiVersion", gvk.GroupVersion().String(),
-					"namespace", obj.GetNamespace(),
-					"name", obj.GetName(),
-				)
-				continue
-			}
 			return fmt.Errorf("failed to apply object %s/%s (%s) from %s: %w",
 				obj.GetNamespace(), obj.GetName(), tracking.GetKind(obj), manifests.Integration, err)
 		}
@@ -211,7 +217,7 @@ func applyIntegrationServiceDeploymentCustomizations(deployment *appsv1.Deployme
 		if spec.IntegrationControllerManager != nil {
 			deployment.Spec.Replicas = &spec.IntegrationControllerManager.Replicas
 		}
-		if err := buildControllerManagerOverlay(spec.IntegrationControllerManager, consoleURL).ApplyToDeployment(deployment); err != nil {
+		if err := buildControllerManagerOverlay(spec.IntegrationControllerManager, consoleURL, spec).ApplyToDeployment(deployment); err != nil {
 			return err
 		}
 	}
@@ -219,16 +225,16 @@ func applyIntegrationServiceDeploymentCustomizations(deployment *appsv1.Deployme
 }
 
 // buildControllerManagerOverlay builds the pod overlay for the controller-manager deployment.
-func buildControllerManagerOverlay(spec *konfluxv1alpha1.ControllerManagerDeploymentSpec, consoleURL string) *customization.PodOverlay {
-	// Build console URL template for pipeline run links in the UI.
-	// Format: https://<host>/ns/{{ .Namespace }}/pipelinerun/{{ .PipelineRunName }}
+// Typed timeout fields (PipelineTimeout, TasksTimeout, FinallyTimeout) are applied last and
+// take precedence over any env entry with the same name in integrationControllerManager.manager.env.
+// When not set in the CRD, the upstream integration-service defaults apply.
+func buildControllerManagerOverlay(spec *konfluxv1alpha1.ControllerManagerDeploymentSpec, consoleURL string, integrationSpec konfluxv1alpha1.KonfluxIntegrationServiceSpec) *customization.PodOverlay {
 	consoleURLTemplate := ""
 	if consoleURL != "" {
 		consoleURLTemplate = fmt.Sprintf("%s/ns/{{ .Namespace }}/pipelinerun/{{ .PipelineRunName }}",
 			strings.TrimSuffix(consoleURL, "/"))
 	}
 
-	// Determine replicas and manager spec (default replicas to 1 if no spec)
 	replicas := int32(1)
 	var managerSpec *konfluxv1alpha1.ContainerSpec
 	if spec != nil {
@@ -243,8 +249,58 @@ func buildControllerManagerOverlay(spec *konfluxv1alpha1.ControllerManagerDeploy
 			customization.FromContainerSpec(managerSpec),
 			customization.WithLeaderElection(),
 			customization.WithEnvOverride("CONSOLE_URL", consoleURLTemplate),
+			customization.WithOptionalEnvOverride(envPipelineTimeout, integrationSpec.PipelineTimeout),
+			customization.WithOptionalEnvOverride(envTasksTimeout, integrationSpec.TasksTimeout),
+			customization.WithOptionalEnvOverride(envFinallyTimeout, integrationSpec.FinallyTimeout),
 		),
 	)
+}
+
+// buildSnapshotGCOverlay builds a PodOverlay for the snapshot GC CronJob container.
+func buildSnapshotGCOverlay(integrationSpec konfluxv1alpha1.KonfluxIntegrationServiceSpec) *customization.PodOverlay {
+	return customization.BuildPodOverlay(
+		customization.DeploymentContext{},
+		customization.WithContainerBuilder(
+			snapshotGCContainerName,
+			customization.FromContainerSpec(integrationSpec.SnapshotGarbageCollector),
+			customization.WithOptionalEnvOverride(envPRSnapshotsToKeep, integrationSpec.PRSnapshotsToKeep),
+			customization.WithOptionalEnvOverride(envNonPRSnapshotsToKeep, integrationSpec.NonPRSnapshotsToKeep),
+			customization.WithOptionalEnvOverride(envMinSnapshotsToKeepPerComponent, integrationSpec.MinSnapshotsToKeepPerComponent),
+		),
+	)
+}
+
+// applySnapshotGCCustomizations applies user-defined customizations to the snapshot GC CronJob.
+// Typed retention fields are applied last and take precedence over any same-named entry in
+// snapshotGarbageCollector.env. The GC binary reads env vars after flag.Parse(), so injected
+// env vars override the command-arg defaults in the upstream manifest. When not set, the
+// upstream defaults apply.
+//
+// An error is returned if the user has configured any GC fields but the expected container
+// (snapshotGCContainerName) is not found in the CronJob spec — this prevents misconfigurations
+// from silently passing when the upstream container name changes.
+// Note: ApplyToPodTemplateSpec silently ignores unmatched containers, so the check is explicit.
+func applySnapshotGCCustomizations(cj *batchv1.CronJob, integrationSpec konfluxv1alpha1.KonfluxIntegrationServiceSpec) error {
+	hasCustomizations := integrationSpec.SnapshotGarbageCollector != nil ||
+		integrationSpec.PRSnapshotsToKeep != "" ||
+		integrationSpec.NonPRSnapshotsToKeep != "" ||
+		integrationSpec.MinSnapshotsToKeepPerComponent != ""
+
+	if hasCustomizations {
+		found := false
+		for _, c := range cj.Spec.JobTemplate.Spec.Template.Spec.Containers {
+			if c.Name == snapshotGCContainerName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("container %q not found in CronJob %s: snapshot GC customizations cannot be applied",
+				snapshotGCContainerName, cj.Name)
+		}
+	}
+
+	return buildSnapshotGCOverlay(integrationSpec).ApplyToPodTemplateSpec(&cj.Spec.JobTemplate.Spec.Template)
 }
 
 // mapKonfluxUIToIntegrationService maps KonfluxUI events to KonfluxIntegrationService reconcile requests.
@@ -265,6 +321,7 @@ func (r *KonfluxIntegrationServiceReconciler) SetupWithManager(mgr ctrl.Manager)
 		// Use predicates to filter out unnecessary updates and prevent reconcile loops
 		// Deployments: watch spec changes AND readiness status changes
 		Owns(&appsv1.Deployment{}, builder.WithPredicates(predicate.DeploymentReadinessPredicate)).
+		Owns(&batchv1.CronJob{}, builder.WithPredicates(predicate.IgnoreStatusUpdatesPredicate)).
 		Owns(&corev1.Service{}, builder.WithPredicates(predicate.IgnoreStatusUpdatesPredicate)).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
