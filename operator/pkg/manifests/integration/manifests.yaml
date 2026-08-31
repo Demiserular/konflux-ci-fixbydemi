@@ -969,7 +969,8 @@ spec:
         description: |-
           NudgeConfig is a namespace-scoped singleton CRD that stores component nudging relationships.
           Exactly one NudgeConfig named "nudge-config" may exist per namespace.
-          Validation rules are enforced stateless by the API server via CEL expressions with no webhook overhead.
+          Structural and singleton rules are enforced by the API server via CEL expressions;
+          graph-cycle and cross-resource Component-existence checks are enforced by a validating webhook.
         properties:
           apiVersion:
             description: |-
@@ -1030,7 +1031,7 @@ spec:
                   - from
                   - to
                   type: object
-                maxItems: 256
+                maxItems: 360
                 type: array
             type: object
             x-kubernetes-validations:
@@ -1323,6 +1324,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - secrets
   verbs:
   - create
@@ -1398,11 +1400,19 @@ rules:
   - appstudio.redhat.com
   resources:
   - environments
+  - nudgeconfigs
   - releaseplans
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - appstudio.redhat.com
+  resources:
+  - nudgeconfigs/status
+  verbs:
+  - get
+  - patch
 - apiGroups:
   - pipelinesascode.tekton.dev
   resources:
@@ -1411,6 +1421,14 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - konflux-integration-runner
+  resources:
+  - clusterroles
+  verbs:
+  - bind
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -1857,7 +1875,7 @@ spec:
         - --leader-elector-retry-period=5s
         command:
         - /manager
-        image: quay.io/konflux-ci/integration-service:b979660e9c5ca10a0c42220dfd77e135cafccebe
+        image: quay.io/konflux-ci/integration-service:7dd7fe87a3ea8d10c166488c12e4b9786c0595cd
         livenessProbe:
           httpGet:
             path: /healthz
@@ -1918,7 +1936,7 @@ spec:
             - --zap-log-level=debug
             - --pr-snapshots-to-keep=70
             - --non-pr-snapshots-to-keep=640
-            image: quay.io/konflux-ci/integration-service:b979660e9c5ca10a0c42220dfd77e135cafccebe
+            image: quay.io/konflux-ci/integration-service:7dd7fe87a3ea8d10c166488c12e4b9786c0595cd
             imagePullPolicy: Always
             name: test-gc
             resources:
@@ -2046,6 +2064,34 @@ webhooks:
     service:
       name: integration-service-webhook-service
       namespace: integration-service
+      path: /validate-appstudio-redhat-com-v1beta2-nudgeconfig
+  failurePolicy: Fail
+  name: vnudgeconfig.kb.io
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+  rules:
+  - apiGroups:
+    - appstudio.redhat.com
+    apiVersions:
+    - v1beta2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - nudgeconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: integration-service-webhook-service
+      namespace: integration-service
       path: /validate-appstudio-redhat-com-v1beta2-componentgroup
   failurePolicy: Fail
   name: vcomponentgroup.kb.io
@@ -2081,26 +2127,6 @@ webhooks:
     - DELETE
     resources:
     - integrationtestscenarios
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: integration-service-webhook-service
-      namespace: integration-service
-      path: /validate-appstudio-redhat-com-v1beta2-nudgeconfig
-  failurePolicy: Fail
-  name: vnudgeconfig.kb.io
-  rules:
-  - apiGroups:
-    - appstudio.redhat.com
-    apiVersions:
-    - v1beta2
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - nudgeconfigs
   sideEffects: None
 - admissionReviewVersions:
   - v1
